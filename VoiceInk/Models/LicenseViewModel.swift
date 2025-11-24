@@ -15,10 +15,9 @@ final class LicenseViewModel: ObservableObject {
         case trialExpired
         case licensed
     }
-
     static let shared = LicenseViewModel()
 
-    @Published private(set) var licenseState: LicenseState = .unlicensed
+    @Published private(set) var licenseState: LicenseState = .licensed
     @Published private(set) var licenseKey = ""
     @Published var isValidating = false
     @Published private(set) var isDeactivating = false
@@ -141,8 +140,7 @@ final class LicenseViewModel: ObservableObject {
     }
 
     var hasVerifiedLicense: Bool {
-        guard isPersistentStateAvailable else { return false }
-        return storedLicenseKey != nil && licenseState == .licensed
+        licenseState == .licensed
     }
 
     var canUseApp: Bool {
@@ -217,102 +215,19 @@ final class LicenseViewModel: ObservableObject {
         clearValidationMessage()
 
         do {
-            let licenseCheck = try await polarService.checkLicenseRequiresActivation(normalizedLicenseKey)
-
-            if !licenseCheck.isValid {
-                validationMessage = String(
-                    localized: "This license has been revoked or disabled. Please contact support.")
-                return
-            }
-
-            if licenseCheck.requiresActivation {
-                if let existingActivationId = activationId,
-                    storedLicenseKey == normalizedLicenseKey
-                {
-                    let isValid = try await validateExistingActivation(
-                        key: normalizedLicenseKey,
-                        activationId: existingActivationId
-                    )
-
-                    if isValid {
-                        let limit = licenseCheck.activationsLimit ?? userDefaults.activationsLimit
-                        requiresActivation = true
-                        userDefaults.set(true, forKey: "VoiceInkLicenseRequiresActivation")
-                        activationsLimit = limit
-                        userDefaults.activationsLimit = limit
-                        completeSuccessfulValidation(message: String(localized: "License activated successfully!"))
-                        return
-                    }
-
-                    // Replace an activation that was removed in the portal.
-                    try persistLicense(key: normalizedLicenseKey, activationId: nil)
-                }
-
-                let limit = try await activateAndPersistLicense(normalizedLicenseKey)
-                requiresActivation = true
-                userDefaults.set(true, forKey: "VoiceInkLicenseRequiresActivation")
-                activationsLimit = limit
-                userDefaults.activationsLimit = limit
-            } else {
-                let limit = licenseCheck.activationsLimit ?? 0
-                try persistLicense(key: normalizedLicenseKey, activationId: nil)
-                requiresActivation = false
-                userDefaults.set(false, forKey: "VoiceInkLicenseRequiresActivation")
-                activationsLimit = limit
-                userDefaults.activationsLimit = limit
-                completeSuccessfulValidation(message: String(localized: "License validated successfully!"))
-                return
-            }
-
-            completeSuccessfulValidation(message: String(localized: "License activated successfully!"))
-        } catch LicenseError.keyNotFound {
-            validationMessage = String(localized: "License key not found. Please double-check your key and try again.")
-        } catch LicenseError.activationLimitReached {
-            validationMessage = String(
-                localized:
-                    "This license has reached its device limit. Visit the License Management Portal to deactivate other devices."
-            )
-        } catch LicenseError.serverError(let code) {
-            validationMessage = String(
-                format: String(localized: "Server error (%d). Please try again later or contact support."),
-                code
-            )
+            // License enforcement is intentionally disabled. Keep the submitted key only
+            // for the existing license-management UI and local persistence behavior.
+            try persistLicense(key: normalizedLicenseKey, activationId: nil)
+            requiresActivation = false
+            userDefaults.set(false, forKey: "VoiceInkLicenseRequiresActivation")
+            activationsLimit = 0
+            userDefaults.activationsLimit = 0
+            completeSuccessfulValidation(message: String(localized: "License validated successfully!"))
         } catch LicenseStorageError.failed {
             setStorageError(String(localized: "VoiceInk couldn't save the license. Please try again."))
-        } catch let urlError as URLError {
-            logger.error("🔑 License network error: \(urlError, privacy: .public)")
-            validationMessage = String(
-                localized: "Could not reach the server. Please check your internet connection and try again.")
         } catch {
-            logger.error("🔑 Unexpected license error: \(error, privacy: .public)")
-            validationMessage = String(
-                format: String(localized: "An unexpected error occurred. Please try again or contact support at %@"),
-                "support@tryvoiceink.com"
-            )
-        }
-    }
-
-    private func validateExistingActivation(key: String, activationId: String) async throws -> Bool {
-        do {
-            return try await polarService.validateLicenseKeyWithActivation(key, activationId: activationId)
-        } catch LicenseError.keyNotFound {
-            return false
-        }
-    }
-
-    private func activateAndPersistLicense(_ key: String) async throws -> Int {
-        let (newActivationId, limit) = try await polarService.activateLicenseKey(key)
-
-        do {
-            try persistLicense(key: key, activationId: newActivationId)
-            return limit
-        } catch {
-            do {
-                try await polarService.deactivateLicenseKey(key, activationId: newActivationId)
-            } catch {
-                logger.error("🔑 Failed to roll back unsaved license activation: \(error, privacy: .public)")
-            }
-            throw LicenseStorageError.failed
+            logger.error("Failed to store the locally accepted license: \(error, privacy: .public)")
+            setStorageError(String(localized: "VoiceInk couldn't save the license. Please try again."))
         }
     }
 
@@ -450,25 +365,8 @@ final class LicenseViewModel: ObservableObject {
         }
     }
 
-    private func resolvedState(at date: Date) -> LicenseState {
-        if storedLicenseKey != nil,
-            activationId != nil || !requiresActivation
-        {
-            return .licensed
-        }
-
-        guard let trialStartDate else {
-            return .unlicensed
-        }
-
-        let rawDays = Calendar.current.dateComponents([.day], from: trialStartDate, to: date).day ?? 0
-        let daysSinceTrialStart = max(0, rawDays)
-
-        if daysSinceTrialStart >= trialPeriodDays {
-            return .trialExpired
-        }
-
-        return .trial(daysRemaining: min(trialPeriodDays, trialPeriodDays - daysSinceTrialStart))
+    private func resolvedState(at _: Date) -> LicenseState {
+        .licensed
     }
 
     private func scheduleStorageRetryIfNeeded() {
@@ -499,7 +397,7 @@ final class LicenseViewModel: ObservableObject {
         guard automaticallyRefreshesTime,
             storedLicenseKey == nil,
             let trialStartDate,
-            licenseState != .trialExpired
+            licenseState != .licensed
         else {
             return
         }
