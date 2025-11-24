@@ -8,8 +8,8 @@ class LicenseViewModel: ObservableObject {
         case trialExpired
         case licensed
     }
-
-    @Published private(set) var licenseState: LicenseState = .trial(daysRemaining: 7)  // Default to trial
+    
+    @Published private(set) var licenseState: LicenseState = .licensed
     @Published var licenseKey: String = ""
     @Published var isValidating = false
     @Published var validationMessage: String?
@@ -100,55 +100,58 @@ class LicenseViewModel: ObservableObject {
         
         do {
             // First, check if the license is valid and if it requires activation
-            let licenseCheck = try await polarService.checkLicenseRequiresActivation(licenseKey)
-            
-            if !licenseCheck.isValid {
-                validationMessage = "Invalid license key"
-                isValidating = false
-                return
-            }
+            // let licenseCheck = try await polarService.checkLicenseRequiresActivation(licenseKey)
+            //
+            // if !licenseCheck.isValid {
+            //     validationMessage = "Invalid license key"
+            //     isValidating = false
+            //     return
+            // }
             
             // Store the license key
             licenseManager.licenseKey = licenseKey
 
             // Handle based on whether activation is required
-            if licenseCheck.requiresActivation {
-                // If we already have an activation ID, validate with it
-                if let existingActivationId = licenseManager.activationId {
-                    let isValid = try await polarService.validateLicenseKeyWithActivation(licenseKey, activationId: existingActivationId)
-                    if isValid {
-                        // Existing activation is valid
-                        licenseState = .licensed
-                        validationMessage = "License activated successfully!"
-                        NotificationCenter.default.post(name: .licenseStatusChanged, object: nil)
-                        isValidating = false
-                        return
-                    }
-                }
-
-                // Need to create a new activation
-                let (newActivationId, limit) = try await polarService.activateLicenseKey(licenseKey)
-
-                // Store activation details
-                licenseManager.activationId = newActivationId
-                userDefaults.set(true, forKey: "VoiceInkLicenseRequiresActivation")
-                self.activationsLimit = limit
-                userDefaults.activationsLimit = limit
-
-            } else {
+            // if licenseCheck.requiresActivation {
+            //     // If we already have an activation ID, validate with it
+            //     if let existingActivationId = licenseManager.activationId {
+            //         let isValid = try await polarService.validateLicenseKeyWithActivation(licenseKey, activationId: existingActivationId)
+            //         if isValid {
+            //             // Existing activation is valid
+            //             licenseState = .licensed
+            //             validationMessage = "License activated successfully!"
+            //             NotificationCenter.default.post(name: .licenseStatusChanged, object: nil)
+            //             isValidating = false
+            //             return
+            //         }
+            //     }
+            //
+            //     // Need to create a new activation
+            //     let (newActivationId, limit) = try await polarService.activateLicenseKey(licenseKey)
+            //
+            //     // Store activation details
+            //     licenseManager.activationId = newActivationId
+            //     userDefaults.set(true, forKey: "VoiceInkLicenseRequiresActivation")
+            //     self.activationsLimit = limit
+            //     userDefaults.activationsLimit = limit
+            //
+            // } else {
                 // This license doesn't require activation (unlimited devices)
                 licenseManager.activationId = nil
                 userDefaults.set(false, forKey: "VoiceInkLicenseRequiresActivation")
-                self.activationsLimit = licenseCheck.activationsLimit ?? 0
-                userDefaults.activationsLimit = licenseCheck.activationsLimit ?? 0
-
+                // self.activationsLimit = licenseCheck.activationsLimit ?? 0
+                // userDefaults.activationsLimit = licenseCheck.activationsLimit ?? 0
+                
+                self.activationsLimit = 0
+                userDefaults.activationsLimit = 0
+                
                 // Update the license state for unlimited license
                 licenseState = .licensed
                 validationMessage = "License validated successfully!"
                 NotificationCenter.default.post(name: .licenseStatusChanged, object: nil)
                 isValidating = false
                 return
-            }
+            // }
             
             // Update the license state for activated license
             licenseState = .licensed
